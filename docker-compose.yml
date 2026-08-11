@@ -1,0 +1,17 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: back_web
+      MYSQL_USER: back_web
+      MYSQL_PASSWORD: back_web
+      MYSQL_ROOT_PASSWORD: root
+      TZ: Asia/Seoul
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - back_web_mysql_data:/var/lib/mysql
+
+volumes:
+  back_web_mysql_data:
