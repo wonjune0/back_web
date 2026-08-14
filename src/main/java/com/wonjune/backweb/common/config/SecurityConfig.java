@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -30,10 +31,15 @@ public class SecurityConfig {
 	public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
 		http
 			.csrf(csrf -> csrf.disable())
+			// Delegates to Spring MVC's CORS registry, which only has mappings under the
+			// local profile (LocalCorsConfig). In prod that registry is empty, so this
+			// adds no headers and lets no preflight through -- the filter chain still
+			// has to allow a request on its own merits.
+			.cors(Customizer.withDefaults())
 			.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 			.authorizeHttpRequests(auth -> auth
 				.requestMatchers("/", "/error", "/actuator/**", "/api/auth/signup", "/api/auth/login",
-						"/api/products", "/api/products/**").permitAll()
+						"/api/products", "/api/products/**", "/api/categories").permitAll()
 				.anyRequest().authenticated()
 			)
 			.exceptionHandling(handling -> handling

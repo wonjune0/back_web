@@ -59,6 +59,7 @@ public class OrderService {
 		if (cartItems.isEmpty()) {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "장바구니가 비어 있습니다");
 		}
+		cartItems = selectItems(cartItems, request.productIds());
 
 		Map<Long, Product> productsById = productRepository
 				.findAllById(cartItems.stream().map(CartItem::getProductId).toList()).stream()
@@ -82,9 +83,32 @@ public class OrderService {
 				.toList();
 		orderItemRepository.saveAll(orderItems);
 
-		cartItemRepository.deleteByCartId(cart.getId());
+		// Only the ordered rows leave the cart; anything the buyer left unticked stays.
+		cartItemRepository.deleteByCartIdAndProductIdIn(cart.getId(),
+				cartItems.stream().map(CartItem::getProductId).toList());
 
 		return toDetailDto(order, orderItems, productsById);
+	}
+
+	/**
+	 * Narrows the cart to the requested products, preserving cart order. A null or empty
+	 * selection means the whole cart. Ids that are not in the cart are rejected rather than
+	 * ignored, so a stale checkout page cannot quietly place a smaller order than it showed.
+	 */
+	private List<CartItem> selectItems(List<CartItem> cartItems, List<Long> productIds) {
+		if (productIds == null || productIds.isEmpty()) {
+			return cartItems;
+		}
+
+		Set<Long> requested = Set.copyOf(productIds);
+		List<CartItem> selected = cartItems.stream()
+				.filter(item -> requested.contains(item.getProductId()))
+				.toList();
+
+		if (selected.size() != requested.size()) {
+			throw new ApiException(HttpStatus.BAD_REQUEST, "장바구니에 없는 상품이 포함되어 있습니다");
+		}
+		return selected;
 	}
 
 	@Transactional(readOnly = true)

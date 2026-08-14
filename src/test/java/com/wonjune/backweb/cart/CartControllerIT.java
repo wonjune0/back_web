@@ -132,6 +132,23 @@ class CartControllerIT {
 	}
 
 	@Test
+	void 응답에_상품_표시필드가_함께_실려온다() throws Exception {
+		String accessToken = loginAs("cart-fields@example.com");
+
+		mockMvc.perform(post("/api/cart/items").header("Authorization", "Bearer " + accessToken)
+						.contentType(MediaType.APPLICATION_JSON).content("{\"productId\":1,\"quantity\":2}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items[0].name").value("수분 진정 크림 100ml, 1개"))
+				.andExpect(jsonPath("$.items[0].originalPrice").value(19000))
+				.andExpect(jsonPath("$.items[0].price").value(15200))
+				.andExpect(jsonPath("$.items[0].deliveryBadge").value("빠른배송"))
+				.andExpect(jsonPath("$.items[0].deliveryText").value("내일 도착"))
+				.andExpect(jsonPath("$.items[0].rating").value(4.6))
+				.andExpect(jsonPath("$.items[0].reviewCount").value(3201))
+				.andExpect(jsonPath("$.items[0].lineTotal").value(30400));
+	}
+
+	@Test
 	void 토큰없이_호출하면_401() throws Exception {
 		mockMvc.perform(get("/api/cart")).andExpect(status().isUnauthorized());
 	}
