@@ -99,7 +99,9 @@ public class CartService {
 	private CartItemResponse toItemResponse(CartItem item, Product product) {
 		long lineTotal = product.getPrice() * item.getQuantity();
 		return new CartItemResponse(product.getId(), product.getName(), product.getImageUrl(),
-				product.getPrice(), item.getQuantity(), lineTotal);
+				product.getOriginalPrice(), product.getPrice(), product.getDeliveryBadge(),
+				product.getDeliveryText(), product.getRating().doubleValue(), product.getReviewCount(),
+				item.getQuantity(), lineTotal);
 	}
 
 }

@@ -2,8 +2,16 @@ package com.wonjune.backweb.order.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import java.util.List;
 
 public record CreateOrderRequest(
+
+		/**
+		 * Products to order, for when the cart page checkout only has some rows ticked.
+		 * Null or empty orders the whole cart, which is what a client that does not know
+		 * about selection gets.
+		 */
+		List<Long> productIds,
 
 		@NotBlank(message = "받는사람 이름은 필수입니다")
 		String recipientName,

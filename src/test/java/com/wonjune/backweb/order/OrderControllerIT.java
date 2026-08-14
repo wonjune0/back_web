@@ -137,6 +137,42 @@ class OrderControllerIT {
 	}
 
 	@Test
+	void productIds로_선택한_상품만_주문되고_나머지는_장바구니에_남는다() throws Exception {
+		String token = loginAs("order-partial@example.com");
+
+		mockMvc.perform(post("/api/cart/items").header("Authorization", "Bearer " + token)
+				.contentType(MediaType.APPLICATION_JSON).content("{\"productId\":1,\"quantity\":2}"));
+		mockMvc.perform(post("/api/cart/items").header("Authorization", "Bearer " + token)
+				.contentType(MediaType.APPLICATION_JSON).content("{\"productId\":7,\"quantity\":1}"));
+
+		// only product 1 is ordered: 15200 * 2 = 30400, product 7 stays behind
+		String selectedBody = CREATE_ORDER_BODY.replaceFirst("\\{", "{\n  \"productIds\": [1],");
+		mockMvc.perform(post("/api/orders").header("Authorization", "Bearer " + token)
+						.contentType(MediaType.APPLICATION_JSON).content(selectedBody))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.totalPrice").value(30400))
+				.andExpect(jsonPath("$.items.length()").value(1))
+				.andExpect(jsonPath("$.items[0].productId").value(1));
+
+		mockMvc.perform(get("/api/cart").header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.items.length()").value(1))
+				.andExpect(jsonPath("$.items[0].productId").value(7));
+	}
+
+	@Test
+	void 장바구니에_없는_productId를_주문하면_400() throws Exception {
+		String token = loginAs("order-notincart@example.com");
+		mockMvc.perform(post("/api/cart/items").header("Authorization", "Bearer " + token)
+				.contentType(MediaType.APPLICATION_JSON).content("{\"productId\":1,\"quantity\":1}"));
+
+		String selectedBody = CREATE_ORDER_BODY.replaceFirst("\\{", "{\n  \"productIds\": [1, 2],");
+		mockMvc.perform(post("/api/orders").header("Authorization", "Bearer " + token)
+						.contentType(MediaType.APPLICATION_JSON).content(selectedBody))
+				.andExpect(status().isBadRequest());
+	}
+
+	@Test
 	void 다른사용자의_주문은_조회할수없다() throws Exception {
 		String ownerToken = loginAs("order-owner@example.com");
 		mockMvc.perform(post("/api/cart/items").header("Authorization", "Bearer " + ownerToken)
