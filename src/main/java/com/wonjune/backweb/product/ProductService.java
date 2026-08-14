@@ -12,9 +12,11 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 @Service
+@Transactional(readOnly = true)
 public class ProductService {
 
 	private final ProductRepository productRepository;
@@ -42,7 +44,7 @@ public class ProductService {
 	}
 
 	public ProductDetailDto getDetail(Long id) {
-		Product product = productRepository.findById(id)
+		Product product = productRepository.findDetailById(id)
 				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "상품을 찾을 수 없습니다"));
 		Category category = product.getCategory();
 
