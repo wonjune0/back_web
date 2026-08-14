@@ -10,7 +10,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wonjune.backweb.auth.dto.LoginRequest;
 import com.wonjune.backweb.auth.dto.SignupRequest;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -47,27 +46,29 @@ class CartControllerIT {
 	@Autowired
 	private ObjectMapper objectMapper;
 
-	private String accessToken;
-
-	@BeforeEach
-	void signupAndLogin() throws Exception {
+	/**
+	 * A cart lives as long as its owner, and nothing truncates tables between tests, so
+	 * every test signs up its own user -- same approach as OrderControllerIT. Sharing one
+	 * account here made the assertions depend on method execution order.
+	 */
+	private String loginAs(String email) throws Exception {
 		SignupRequest signupRequest = new SignupRequest(
-				"cart-user@example.com", "password123", "홍길동", "010-1234-5678",
-				true, true, true, true);
+				email, "password123", "홍길동", "010-1234-5678", true, true, true, true);
 		mockMvc.perform(post("/api/auth/signup")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(objectMapper.writeValueAsString(signupRequest)));
 
-		LoginRequest loginRequest = new LoginRequest("cart-user@example.com", "password123");
 		String body = mockMvc.perform(post("/api/auth/login")
 						.contentType(MediaType.APPLICATION_JSON)
-						.content(objectMapper.writeValueAsString(loginRequest)))
+						.content(objectMapper.writeValueAsString(new LoginRequest(email, "password123"))))
 				.andReturn().getResponse().getContentAsString();
-		accessToken = objectMapper.readTree(body).get("accessToken").asText();
+		return objectMapper.readTree(body).get("accessToken").asText();
 	}
 
 	@Test
 	void 빈장바구니_조회시_빈응답() throws Exception {
+		String accessToken = loginAs("cart-empty@example.com");
+
 		mockMvc.perform(get("/api/cart").header("Authorization", "Bearer " + accessToken))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.items").isEmpty())
@@ -77,6 +78,8 @@ class CartControllerIT {
 
 	@Test
 	void 담기는_동일상품_추가시_수량이_누적된다() throws Exception {
+		String accessToken = loginAs("cart-add@example.com");
+
 		String addBody = "{\"productId\":1,\"quantity\":2}";
 		mockMvc.perform(post("/api/cart/items").header("Authorization", "Bearer " + accessToken)
 						.contentType(MediaType.APPLICATION_JSON).content(addBody))
@@ -93,6 +96,8 @@ class CartControllerIT {
 
 	@Test
 	void 수량변경은_절대값으로_설정된다() throws Exception {
+		String accessToken = loginAs("cart-update@example.com");
+
 		mockMvc.perform(post("/api/cart/items").header("Authorization", "Bearer " + accessToken)
 						.contentType(MediaType.APPLICATION_JSON).content("{\"productId\":2,\"quantity\":3}"))
 				.andExpect(status().isOk());
@@ -105,6 +110,8 @@ class CartControllerIT {
 
 	@Test
 	void 삭제와_전체비우기() throws Exception {
+		String accessToken = loginAs("cart-delete@example.com");
+
 		mockMvc.perform(post("/api/cart/items").header("Authorization", "Bearer " + accessToken)
 						.contentType(MediaType.APPLICATION_JSON).content("{\"productId\":3,\"quantity\":1}"))
 				.andExpect(status().isOk());

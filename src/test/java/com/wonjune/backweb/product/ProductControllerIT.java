@@ -54,10 +54,13 @@ class ProductControllerIT {
 
 	@Test
 	void search는_카테고리필터보다_우선한다() throws Exception {
+		// "크림" matches both 수분 진정 크림(1) and 수딩 선크림(5); had the 간식/과자
+		// filter been applied instead of ignored, neither would come back.
 		mockMvc.perform(get("/api/products").param("search", "크림").param("category", "간식/과자"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.totalElements").value(1))
-				.andExpect(jsonPath("$.content[0].id").value(1));
+				.andExpect(jsonPath("$.totalElements").value(2))
+				.andExpect(jsonPath("$.content[0].id").value(1))
+				.andExpect(jsonPath("$.content[1].id").value(5));
 	}
 
 	@Test
