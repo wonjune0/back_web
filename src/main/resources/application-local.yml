@@ -17,3 +17,9 @@ logging:
 jwt:
   secret: local-only-dev-secret-key-change-me-please-32bytes+
   expiration-ms: 7200000
+
+payment:
+  secret-key: local-only-dev-payment-key
+  mock:
+    # 로컬에서는 실패 주입을 켜 둔다. 결제 실패 화면과 재고 원복을 눈으로 확인하기 위한 것.
+    allow-forced-failure: true

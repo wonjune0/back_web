@@ -16,6 +16,7 @@ public record CartItemResponse(
 		Double rating,
 		Integer reviewCount,
 		Integer quantity,
-		Long lineTotal
+		Long lineTotal,
+		Integer stockQuantity
 ) {
 }

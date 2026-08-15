@@ -16,3 +16,14 @@ logging:
 jwt:
   secret: ${JWT_SECRET}
   expiration-ms: ${JWT_EXPIRATION_MS:7200000}
+
+# 전략과 실패 주입을 환경변수로 노출해 두면 이미지를 다시 빌드하지 않고
+# 태스크 정의만 바꿔서 같은 빌드로 세 가지 전략을 측정할 수 있다.
+stock:
+  strategy: ${STOCK_STRATEGY:ATOMIC}
+
+payment:
+  secret-key: ${PAYMENT_SECRET_KEY:}
+  mock:
+    failure-rate: ${PAYMENT_FAILURE_RATE:0.0}
+    allow-forced-failure: ${PAYMENT_ALLOW_FORCED_FAILURE:false}
