@@ -114,9 +114,20 @@ public class OrderService {
 	@Transactional(readOnly = true)
 	public PageResponse<OrderSummaryDto> listOrders(Long userId, int page, int size) {
 		Page<Order> orders = orderRepository.findByUserIdOrderByPlacedAtDesc(userId, PageRequest.of(page, size));
-		return PageResponse.from(orders.map(order -> new OrderSummaryDto(
-				order.getOrderNumber(), order.getPlacedAt(), order.getStatus(), order.getTotalPrice(),
-				orderItemRepository.countByOrderId(order.getId()))));
+
+		// 주문마다 항목을 세면 페이지 크기만큼 쿼리가 붙는다. 한 번에 읽어 주문별로 묶는다.
+		List<Long> orderIds = orders.getContent().stream().map(Order::getId).toList();
+		Map<Long, List<OrderItem>> itemsByOrderId = orderIds.isEmpty()
+				? Map.of()
+				: orderItemRepository.findByOrderIdIn(orderIds).stream()
+						.collect(Collectors.groupingBy(OrderItem::getOrderId));
+
+		return PageResponse.from(orders.map(order -> {
+			List<OrderItem> items = itemsByOrderId.getOrDefault(order.getId(), List.of());
+			String firstProductName = items.isEmpty() ? null : items.get(0).getProductNameSnapshot();
+			return new OrderSummaryDto(order.getOrderNumber(), order.getPlacedAt(), order.getStatus(),
+					order.getTotalPrice(), items.size(), firstProductName);
+		}));
 	}
 
 	@Transactional(readOnly = true)

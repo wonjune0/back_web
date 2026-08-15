@@ -7,6 +7,7 @@ public record OrderSummaryDto(
 		LocalDateTime placedAt,
 		String status,
 		Long totalPrice,
-		long itemCount
+		long itemCount,
+		String firstProductName
 ) {
 }

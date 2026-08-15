@@ -128,7 +128,9 @@ class OrderControllerIT {
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.totalElements").value(1))
 				.andExpect(jsonPath("$.content[0].orderNumber").value(orderNumber))
-				.andExpect(jsonPath("$.content[0].itemCount").value(1));
+				.andExpect(jsonPath("$.content[0].itemCount").value(1))
+				.andExpect(jsonPath("$.content[0].firstProductName").value("수분 진정 크림 100ml, 1개"))
+				.andExpect(jsonPath("$.content[0].totalPrice").value(15200));
 
 		mockMvc.perform(get("/api/orders/" + orderNumber).header("Authorization", "Bearer " + token))
 				.andExpect(status().isOk())
@@ -170,6 +172,16 @@ class OrderControllerIT {
 		mockMvc.perform(post("/api/orders").header("Authorization", "Bearer " + token)
 						.contentType(MediaType.APPLICATION_JSON).content(selectedBody))
 				.andExpect(status().isBadRequest());
+	}
+
+	@Test
+	void 주문이_없으면_빈_목록을_반환한다() throws Exception {
+		String token = loginAs("order-empty-list@example.com");
+
+		mockMvc.perform(get("/api/orders").header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalElements").value(0))
+				.andExpect(jsonPath("$.content").isEmpty());
 	}
 
 	@Test
