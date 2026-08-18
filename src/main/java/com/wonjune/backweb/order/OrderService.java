@@ -1,52 +1,49 @@
 package com.wonjune.backweb.order;
 
-import com.wonjune.backweb.cart.Cart;
-import com.wonjune.backweb.cart.CartItem;
-import com.wonjune.backweb.cart.CartItemRepository;
-import com.wonjune.backweb.cart.CartRepository;
-import com.wonjune.backweb.common.dto.PageResponse;
 import com.wonjune.backweb.common.exception.ApiException;
 import com.wonjune.backweb.order.dto.CreateOrderRequest;
 import com.wonjune.backweb.order.dto.OrderDetailDto;
-import com.wonjune.backweb.order.dto.OrderItemDto;
-import com.wonjune.backweb.order.dto.OrderSummaryDto;
-import com.wonjune.backweb.product.Product;
-import com.wonjune.backweb.product.ProductRepository;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import com.wonjune.backweb.payment.Payment;
+import com.wonjune.backweb.payment.PaymentDeclinedException;
+import com.wonjune.backweb.payment.PaymentGateway;
+import com.wonjune.backweb.payment.PaymentRepository;
+import com.wonjune.backweb.payment.PaymentResult;
+import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Sequences a checkout across two transactions and one remote call.
+ *
+ * Note what is missing: createOrder has no @Transactional. The gateway call in the middle
+ * must run with no transaction open, so the boundaries live in CheckoutTransactions and
+ * this class only decides the order things happen in.
+ */
 @Service
 @RequiredArgsConstructor
 public class OrderService {
 
-	private static final DateTimeFormatter ORDER_NUMBER_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
-	private static final int ORDER_NUMBER_MAX_ATTEMPTS = 5;
+	private static final Logger log = LoggerFactory.getLogger(OrderService.class);
+
+	private static final int RESERVE_MAX_ATTEMPTS = 3;
 
 	private static final Set<String> VALID_DELIVERY_REQUESTS = Set.of(
 			"문 앞에 놓아주세요", "직접 받을게요", "경비실에 맡겨주세요", "배송 전 연락해주세요");
 	private static final Set<String> VALID_PAYMENT_METHODS = Set.of("card", "transfer");
 
 	private final OrderRepository orderRepository;
-	private final OrderItemRepository orderItemRepository;
-	private final CartRepository cartRepository;
-	private final CartItemRepository cartItemRepository;
-	private final ProductRepository productRepository;
+	private final PaymentRepository paymentRepository;
+	private final PaymentGateway paymentGateway;
+	private final CheckoutTransactions checkoutTransactions;
+	private final OrderQueryService orderQueryService;
 
-	@Transactional
-	public OrderDetailDto createOrder(Long userId, CreateOrderRequest request) {
+	public OrderDetailDto createOrder(Long userId, String idempotencyKey, boolean forceFailure,
+			CreateOrderRequest request) {
 		if (!VALID_DELIVERY_REQUESTS.contains(request.deliveryRequest())) {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "유효하지 않은 배송 요청사항입니다");
 		}
@@ -54,109 +51,85 @@ public class OrderService {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "유효하지 않은 결제수단입니다");
 		}
 
-		Cart cart = cartRepository.findByUserId(userId).orElse(null);
-		List<CartItem> cartItems = cart == null ? List.of() : cartItemRepository.findByCartId(cart.getId());
-		if (cartItems.isEmpty()) {
-			throw new ApiException(HttpStatus.BAD_REQUEST, "장바구니가 비어 있습니다");
+		// A key we have already seen means this is a retry, not a second purchase.
+		Optional<Payment> replay = paymentRepository.findByIdempotencyKey(idempotencyKey);
+		if (replay.isPresent()) {
+			return resolveReplay(userId, replay.get());
 		}
-		cartItems = selectItems(cartItems, request.productIds());
 
-		Map<Long, Product> productsById = productRepository
-				.findAllById(cartItems.stream().map(CartItem::getProductId).toList()).stream()
-				.collect(Collectors.toMap(Product::getId, Function.identity()));
+		CheckoutTransactions.Reservation reservation = reserve(userId, idempotencyKey, request);
+		if (reservation == null) {
+			// A request running alongside this one claimed the key first.
+			return resolveReplay(userId, paymentRepository.findByIdempotencyKey(idempotencyKey)
+					.orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "결제를 처리하고 있습니다")));
+		}
 
-		long totalPrice = cartItems.stream()
-				.mapToLong(item -> productsById.get(item.getProductId()).getPrice() * item.getQuantity())
-				.sum();
+		PaymentResult result = approve(idempotencyKey, reservation, forceFailure);
+		CheckoutTransactions.Settlement settlement = checkoutTransactions.settle(reservation.orderId(), result);
+		if (!settlement.approved()) {
+			throw new PaymentDeclinedException(settlement.failureReason());
+		}
+		return orderQueryService.getOrder(userId, settlement.orderNumber());
+	}
 
-		Order order = orderRepository.save(new Order(
-				generateOrderNumber(), userId, request.recipientName(), request.recipientPhone(),
-				request.zipcode(), request.address1(), request.address2(), request.deliveryRequest(),
-				request.paymentMethod(), totalPrice));
-
-		List<OrderItem> orderItems = cartItems.stream()
-				.map(item -> {
-					Product product = productsById.get(item.getProductId());
-					return new OrderItem(order.getId(), product.getId(), product.getName(),
-							product.getPrice(), item.getQuantity());
-				})
-				.toList();
-		orderItemRepository.saveAll(orderItems);
-
-		// Only the ordered rows leave the cart; anything the buyer left unticked stays.
-		cartItemRepository.deleteByCartIdAndProductIdIn(cart.getId(),
-				cartItems.stream().map(CartItem::getProductId).toList());
-
-		return toDetailDto(order, orderItems, productsById);
+	public void cancelOrder(Long userId, String orderNumber) {
+		checkoutTransactions.cancel(userId, orderNumber);
 	}
 
 	/**
-	 * Narrows the cart to the requested products, preserving cart order. A null or empty
-	 * selection means the whole cart. Ids that are not in the cart are rejected rather than
-	 * ignored, so a stale checkout page cannot quietly place a smaller order than it showed.
+	 * Returns null when the idempotency key was claimed by a concurrent request.
+	 *
+	 * Two different unique constraints can fail in here, so rather than parsing the driver's
+	 * error text we ask which one it was: if the key is now taken, we lost the idempotency
+	 * race; if it is not, the order number collided and a fresh attempt will pick another.
 	 */
-	private List<CartItem> selectItems(List<CartItem> cartItems, List<Long> productIds) {
-		if (productIds == null || productIds.isEmpty()) {
-			return cartItems;
-		}
-
-		Set<Long> requested = Set.copyOf(productIds);
-		List<CartItem> selected = cartItems.stream()
-				.filter(item -> requested.contains(item.getProductId()))
-				.toList();
-
-		if (selected.size() != requested.size()) {
-			throw new ApiException(HttpStatus.BAD_REQUEST, "장바구니에 없는 상품이 포함되어 있습니다");
-		}
-		return selected;
-	}
-
-	@Transactional(readOnly = true)
-	public PageResponse<OrderSummaryDto> listOrders(Long userId, int page, int size) {
-		Page<Order> orders = orderRepository.findByUserIdOrderByPlacedAtDesc(userId, PageRequest.of(page, size));
-		return PageResponse.from(orders.map(order -> new OrderSummaryDto(
-				order.getOrderNumber(), order.getPlacedAt(), order.getStatus(), order.getTotalPrice(),
-				orderItemRepository.countByOrderId(order.getId()))));
-	}
-
-	@Transactional(readOnly = true)
-	public OrderDetailDto getOrder(Long userId, String orderNumber) {
-		Order order = orderRepository.findByOrderNumberAndUserId(orderNumber, userId)
-				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "주문을 찾을 수 없습니다"));
-		List<OrderItem> items = orderItemRepository.findByOrderId(order.getId());
-
-		List<Long> productIds = items.stream().map(OrderItem::getProductId).filter(Objects::nonNull).toList();
-		Map<Long, Product> productsById = productRepository.findAllById(productIds).stream()
-				.collect(Collectors.toMap(Product::getId, Function.identity()));
-
-		return toDetailDto(order, items, productsById);
-	}
-
-	private OrderDetailDto toDetailDto(Order order, List<OrderItem> items, Map<Long, Product> productsById) {
-		List<OrderItemDto> itemDtos = items.stream()
-				.map(item -> {
-					Product product = productsById.get(item.getProductId());
-					String imageUrl = product != null ? product.getImageUrl() : null;
-					return new OrderItemDto(item.getProductId(), item.getProductNameSnapshot(), imageUrl,
-							item.getProductPriceSnapshot(), item.getQuantity(), item.getSubtotal());
-				})
-				.toList();
-
-		return new OrderDetailDto(
-				order.getOrderNumber(), order.getStatus(), order.getPlacedAt(), itemDtos, order.getTotalPrice(),
-				order.getRecipientName(), order.getRecipientPhone(), order.getZipcode(), order.getAddress1(),
-				order.getAddress2(), order.getDeliveryRequest(), order.getPaymentMethod());
-	}
-
-	private String generateOrderNumber() {
-		String datePart = LocalDate.now().format(ORDER_NUMBER_DATE_FORMAT);
-		for (int attempt = 0; attempt < ORDER_NUMBER_MAX_ATTEMPTS; attempt++) {
-			String candidate = datePart + "-" + ThreadLocalRandom.current().nextInt(100_000, 1_000_000);
-			if (!orderRepository.existsByOrderNumber(candidate)) {
-				return candidate;
+	private CheckoutTransactions.Reservation reserve(Long userId, String idempotencyKey,
+			CreateOrderRequest request) {
+		for (int attempt = 1; attempt <= RESERVE_MAX_ATTEMPTS; attempt++) {
+			try {
+				return checkoutTransactions.reserve(userId, idempotencyKey, request);
+			} catch (DataIntegrityViolationException e) {
+				if (paymentRepository.findByIdempotencyKey(idempotencyKey).isPresent()) {
+					return null;
+				}
+				log.warn("Order number collided, retrying reservation (attempt {})", attempt);
+				if (attempt == RESERVE_MAX_ATTEMPTS) {
+					throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "주문번호 생성에 실패했습니다");
+				}
 			}
 		}
-		throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "주문번호 생성에 실패했습니다");
+		throw new IllegalStateException("unreachable");
+	}
+
+	/**
+	 * A gateway that throws is a gateway that declined, as far as the order is concerned.
+	 * Letting the exception out instead would leave the order PENDING forever, holding
+	 * stock nobody else can buy.
+	 */
+	private PaymentResult approve(String idempotencyKey, CheckoutTransactions.Reservation reservation,
+			boolean forceFailure) {
+		try {
+			return paymentGateway.approve(idempotencyKey, reservation.totalPrice(), forceFailure);
+		} catch (RuntimeException e) {
+			log.error("Payment gateway call failed for order {}", reservation.orderNumber(), e);
+			return PaymentResult.declined("결제 처리 중 오류가 발생했습니다");
+		}
+	}
+
+	private OrderDetailDto resolveReplay(Long userId, Payment payment) {
+		Order order = orderRepository.findById(payment.getOrderId())
+				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "주문을 찾을 수 없습니다"));
+		if (!order.getUserId().equals(userId)) {
+			// Someone else's key. Say nothing about whose.
+			throw new ApiException(HttpStatus.CONFLICT, "이미 사용된 요청입니다");
+		}
+
+		return switch (payment.getStatus()) {
+			case APPROVED -> orderQueryService.getOrder(userId, order.getOrderNumber());
+			case FAILED -> throw new PaymentDeclinedException(payment.getFailureReason());
+			// The first request is still waiting on the gateway; there is nothing to return yet.
+			case PENDING -> throw new ApiException(HttpStatus.CONFLICT, "결제를 처리하고 있습니다");
+		};
 	}
 
 }

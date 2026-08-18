@@ -12,6 +12,7 @@ public record ProductSummaryDto(
 		String deliveryText,
 		Double rating,
 		Integer reviewCount,
-		Long rewardAmount
+		Long rewardAmount,
+		Integer stockQuantity
 ) {
 }

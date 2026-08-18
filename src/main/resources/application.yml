@@ -17,6 +17,17 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
+# 재고 차감 전략. 부하 테스트에서 비교하기 위해 코드가 아니라 설정으로 고른다.
+stock:
+  strategy: ATOMIC
+
+payment:
+  mock:
+    min-latency-ms: 200
+    max-latency-ms: 800
+    failure-rate: 0.0
+    allow-forced-failure: false
+
 management:
   endpoints:
     web:

@@ -13,6 +13,7 @@ public record ProductDetailDto(
 		Double rating,
 		Integer reviewCount,
 		Long rewardAmount,
-		String detailDescription
+		String detailDescription,
+		Integer stockQuantity
 ) {
 }

@@ -4,6 +4,8 @@ import jakarta.persistence.AccessType;
 import jakarta.persistence.Access;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -32,8 +34,9 @@ public class Order {
 	@Column(name = "user_id", nullable = false)
 	private Long userId;
 
+	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
-	private String status;
+	private OrderStatus status;
 
 	@Column(name = "recipient_name", nullable = false)
 	private String recipientName;
@@ -73,7 +76,7 @@ public class Order {
 			String paymentMethod, Long totalPrice) {
 		this.orderNumber = orderNumber;
 		this.userId = userId;
-		this.status = "PLACED";
+		this.status = OrderStatus.PENDING;
 		this.recipientName = recipientName;
 		this.recipientPhone = recipientPhone;
 		this.zipcode = zipcode;
@@ -83,6 +86,34 @@ public class Order {
 		this.paymentMethod = paymentMethod;
 		this.totalPrice = totalPrice;
 		this.placedAt = LocalDateTime.now();
+	}
+
+	/**
+	 * Transitions are guarded here rather than in the service so an order can never be
+	 * settled twice -- a replayed gateway callback or a retried settle finds the order
+	 * already out of PENDING and is rejected instead of paying it again.
+	 */
+	public void markPaid() {
+		requirePending();
+		this.status = OrderStatus.PAID;
+	}
+
+	public void markFailed() {
+		requirePending();
+		this.status = OrderStatus.FAILED;
+	}
+
+	public void cancel() {
+		if (status != OrderStatus.PAID) {
+			throw new IllegalStateException("결제 완료된 주문만 취소할 수 있습니다 (현재 " + status + ")");
+		}
+		this.status = OrderStatus.CANCELLED;
+	}
+
+	private void requirePending() {
+		if (status != OrderStatus.PENDING) {
+			throw new IllegalStateException("이미 처리된 주문입니다 (현재 " + status + ")");
+		}
 	}
 
 	@PrePersist

@@ -6,6 +6,9 @@ import com.wonjune.backweb.common.exception.ApiException;
 import com.wonjune.backweb.product.dto.ProductDetailDto;
 import com.wonjune.backweb.product.dto.ProductSearchCriteria;
 import com.wonjune.backweb.product.dto.ProductSummaryDto;
+import com.wonjune.backweb.stock.StockService;
+import java.util.List;
+import java.util.Map;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -20,9 +23,11 @@ import org.springframework.util.StringUtils;
 public class ProductService {
 
 	private final ProductRepository productRepository;
+	private final StockService stockService;
 
-	public ProductService(ProductRepository productRepository) {
+	public ProductService(ProductRepository productRepository, StockService stockService) {
 		this.productRepository = productRepository;
+		this.stockService = stockService;
 	}
 
 	public PageResponse<ProductSummaryDto> search(ProductSearchCriteria criteria) {
@@ -40,13 +45,20 @@ public class ProductService {
 
 		PageRequest pageRequest = PageRequest.of(criteria.page(), criteria.size(), resolveSort(criteria.sort()));
 		Page<Product> page = productRepository.search(search, category, parentCategory, pageRequest);
-		return PageResponse.from(page.map(this::toSummaryDto));
+
+		// One stock lookup for the whole page rather than one per card.
+		Map<Long, Integer> stockByProductId = stockService.quantitiesOf(
+				page.getContent().stream().map(Product::getId).toList());
+
+		return PageResponse.from(page.map(product ->
+				toSummaryDto(product, stockByProductId.getOrDefault(product.getId(), 0))));
 	}
 
 	public ProductDetailDto getDetail(Long id) {
 		Product product = productRepository.findDetailById(id)
 				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "상품을 찾을 수 없습니다"));
 		Category category = product.getCategory();
+		int stockQuantity = stockService.quantitiesOf(List.of(id)).getOrDefault(id, 0);
 
 		return new ProductDetailDto(
 				product.getId(),
@@ -61,11 +73,12 @@ public class ProductService {
 				product.getRating().doubleValue(),
 				product.getReviewCount(),
 				product.getRewardAmount(),
-				product.getDetailDescription()
+				product.getDetailDescription(),
+				stockQuantity
 		);
 	}
 
-	private ProductSummaryDto toSummaryDto(Product product) {
+	private ProductSummaryDto toSummaryDto(Product product, Integer stockQuantity) {
 		Category category = product.getCategory();
 		return new ProductSummaryDto(
 				product.getId(),
@@ -79,7 +92,8 @@ public class ProductService {
 				product.getDeliveryText(),
 				product.getRating().doubleValue(),
 				product.getReviewCount(),
-				product.getRewardAmount()
+				product.getRewardAmount(),
+				stockQuantity
 		);
 	}
 
